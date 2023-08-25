@@ -9,30 +9,23 @@ use English qw(-no_match_vars);
 
 use GLPI::Agent::Tools;
 
-sub isEnabled {
-    my (%params) = @_;
-
+sub _get_meshcentral_config {
+    my @configs = ();
     if (OSNAME eq 'MSWin32') {
-
-        GLPI::Agent::Tools::Win32->use();
-
-        my $key = getRegistryKey(
-            path        => "HKEY_LOCAL_MACHINE/SOFTWARE/Open Source/",
-            required    => [ qw/NodeId/ ],
-            maxdepth    => 2,
-            logger      => $params{logger}
-        );
-
-        return $key && $key->{'Mesh Agent/'} && keys(%{$key->{'Mesh Agent/'}});
-
+        push @configs, Glob('C:\Program Files\*\*\*.msh');
+        if (has_folder('C:\Program Files (x86)')) {
+            push @configs, Glob('C:\Program Files (x86)\*\*\*.msh');
+        }
     } elsif (OSNAME eq 'darwin') {
-        return canRun('defaults') && Glob(
-            "/Library/LaunchDaemons/meshagent*.plist"
-        );
+        push @configs, Glob('/usr/local/mesh_services/*/*.msh');
+    } else {
+        push @configs, Glob('/usr/local/mesh_services/*/*/*.msh');
     }
+    return grep { canRead($_) } @configs;
+}
 
-    return unless OSNAME eq 'linux';
-    return has_file('/etc/systemd/system/meshagent.service');
+sub isEnabled {
+    return _get_meshcentral_config() ? 1 : 0;
 }
 
 sub doInventory {
@@ -41,16 +34,38 @@ sub doInventory {
     my $inventory = $params{inventory};
     my $logger    = $params{logger};
 
-    my $nodeId    = _getNodeId(logger => $logger)
-        or return;
+    foreach my $conf (_get_meshcentral_config()) {
+        my $meshServiceName = getFirstMatch(
+            file    => $conf,
+            logger  => $logger,
+            pattern => qr/^meshServiceName=(\S+)/
+        );
 
-    $inventory->addEntry(
-        section => 'REMOTE_MGMT',
-        entry   => {
-            ID   => $nodeId,
-            TYPE => 'meshcentral'
+        if (defined($meshServiceName)) {
+            my $nodeId    = _getNodeId(logger => $logger, service => $meshServiceName)
+                or next;
+            my $serverUrl = getFirstMatch(
+                file    => $conf,
+                logger  => $logger,
+                pattern => qr/^MeshServer=wss:\/\/(\S+):\d+\/agent.ashx/
+            );
         }
-    );
+
+        if (defined($serverUrl) && defined($nodeId)) {
+            $logger->debug('Found MeshCentral nodeId : ' . $nodeId .' at ' . $serverUrl) if $logger;
+
+            $inventory->addEntry(
+                section => 'REMOTE_MGMT',
+                entry   => {
+                    ID   => $nodeId,
+                    TYPE => 'meshcentral',
+                    URL  => $serverUrl
+                }
+            );
+        } else {
+            $logger->debug('MeshCentral nodeId not found for '.$conf) if $logger;
+        }
+    }
 }
 
 sub _getNodeId {
@@ -65,7 +80,7 @@ sub _winBased {
     my (%params) = @_;
 
     my $nodeId = getRegistryValue(
-        path        => "HKEY_LOCAL_MACHINE/SOFTWARE/Open Source/Mesh Agent/NodeId",
+        path        => "HKEY_LOCAL_MACHINE/SOFTWARE/Open Source/".$params{service}."/NodeId",
         logger      => $params{logger}
     );
 
@@ -76,7 +91,7 @@ sub _linuxBased {
     my (%params) = @_;
 
     my $command = getFirstLine(
-        file    => "/etc/systemd/system/meshagent.service",
+        file    => "/etc/systemd/system/".$params{service}.".service",
         pattern => qr/Ex.*=(.*)\s\-/,
         logger  => $params{logger},
     );
@@ -89,7 +104,6 @@ sub _linuxBased {
 
 sub _darwinBased {
     my (%params) = @_;
-
     return getFirstLine(
         command => "/usr/local/mesh_services/meshagent/meshagent_osx64 -nodeid",
         logger  => $params{logger}

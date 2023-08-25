@@ -80,7 +80,7 @@ my %fields = (
     PROCESSES        => [ qw/USER PID CPUUSAGE MEM VIRTUALMEMORY TTY STARTED
                              CMD/ ],
     REGISTRY         => [ qw/NAME REGVALUE HIVE/ ],
-    REMOTE_MGMT      => [ qw/ID TYPE/ ],
+    REMOTE_MGMT      => [ qw/ID TYPE URL/ ],
     RUDDER           => [ qw/AGENT UUID HOSTNAME SERVER_ROLES AGENT_CAPABILITIES/ ],
     SLOTS            => [ qw/DESCRIPTION DESIGNATION NAME STATUS/ ],
     SOFTWARES        => [ qw/COMMENTS FILESIZE FOLDER FROM HELPLINK INSTALLDATE
@@ -332,7 +332,7 @@ sub addEntry {
 
     foreach my $field (keys %$entry) {
         if (!$fields->{$field}) {
-            # unvalid field, log error and remove
+            # invalid field, log error and remove
             $self->{logger}->debug("unknown field $field for section $section");
             delete $entry->{$field};
             next;
